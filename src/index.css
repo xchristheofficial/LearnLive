@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+html { scroll-behavior: smooth; }
+html.dark { color-scheme: dark; }
+body { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; color: #0f172a; transition: background-color 0.25s ease, color 0.25s ease; }
+
+/* Global dark-mode re-theme: the app shell (Layout) already carries
+   explicit dark: utility classes, but dozens of inner cards/pages use
+   plain light-surface classes (bg-white, bg-[#f6f7fb], text-slate-*,
+   border-slate-*). Rather than touching every page file, re-point those
+   recurring utilities under html.dark so the whole app reliably goes dark
+   when the toggle is switched. Scoped to the app shell + landing/auth only
+   (not the always-dark Room/FaceCheck screens, which are unaffected since
+   they don't use these light-surface classes). */
+html.dark body { background: #0b1120; }
+html.dark .bg-white { background-color: #111827 !important; }
+html.dark .bg-\[\#f6f7fb\] { background-color: #0b1120 !important; }
+html.dark .bg-\[\#fbfbfe\] { background-color: #0b1120 !important; }
+html.dark .bg-slate-50 { background-color: #1e293b !important; }
+html.dark .bg-slate-100 { background-color: #1e293b !important; }
+html.dark .border-slate-200,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-100 { border-color: #334155 !important; }
+html.dark .text-slate-900 { color: #f1f5f9 !important; }
+html.dark .text-slate-800 { color: #e2e8f0 !important; }
+html.dark .text-slate-700 { color: #cbd5e1 !important; }
+html.dark .text-slate-600 { color: #cbd5e1 !important; }
+html.dark .text-slate-500 { color: #94a3b8 !important; }
+html.dark .text-slate-400 { color: #94a3b8 !important; }
+html.dark .shadow-sm, html.dark .shadow-xl, html.dark .shadow-lg, html.dark .shadow-2xl { box-shadow: 0 10px 25px -10px rgba(0,0,0,0.5) !important; }
+html.dark input, html.dark select, html.dark textarea { background-color: #1e293b !important; color: #f1f5f9 !important; border-color: #334155 !important; }
+html.dark input::placeholder, html.dark textarea::placeholder { color: #64748b !important; }
+::selection { background: #c7d2fe; }
+input, select, textarea, button { font-family: inherit; }
+.scrollbar-thin::-webkit-scrollbar { width: 5px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
+@keyframes floatUp { 0% { transform: translateY(0) scale(1); opacity: 1; } 100% { transform: translateY(-140px) scale(1.4); opacity: 0; } }
+.reaction-float { animation: floatUp 2.2s ease-out forwards; }
+@keyframes pulseLive { 0%,100% { box-shadow: 0 0 0 0 rgba(244,63,94,.5);} 50% { box-shadow: 0 0 0 6px rgba(244,63,94,0);} }
+.live-dot { animation: pulseLive 1.6s infinite; }
+@keyframes toastIn { 0% { transform: translateY(12px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }

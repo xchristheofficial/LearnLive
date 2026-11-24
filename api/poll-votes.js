@@ -1,0 +1,6 @@
+import supabase from './db-client.js';
+const cors=(req,res)=>{res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET, POST, PUT, DELETE, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');if(req.method==='OPTIONS'){res.status(204).end();return true;}return false;};
+export default async function handler(req,res){if(cors(req,res))return;try{
+ if(req.method==='GET'){const{poll_id}=req.query;if(!poll_id)return res.status(200).json([]);const{data,error}=await supabase.from('poll_votes').select('*').eq('poll_id',poll_id);if(error)throw error;return res.status(200).json(data);}
+ if(req.method==='POST'){const b=req.body||{};const{data:ex}=await supabase.from('poll_votes').select('*').eq('poll_id',b.poll_id).eq('user_id',b.user_id).maybeSingle();if(ex){const{data,error}=await supabase.from('poll_votes').update({option_index:b.option_index}).eq('id',ex.id).select().single();if(error)throw error;return res.status(200).json(data);}const{data,error}=await supabase.from('poll_votes').insert({poll_id:b.poll_id,user_id:b.user_id,user_name:b.user_name,option_index:b.option_index}).select().single();if(error)throw error;return res.status(201).json(data);}
+ res.status(405).json({error:'Method not allowed'});}catch(err){res.status(500).json({error:err.message});}}
