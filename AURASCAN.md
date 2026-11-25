@@ -15,26 +15,39 @@ LearnLive works exactly as it does today, with its own built-in face photos.
 
 A photo or a phone screen cannot pass the live scan. The same face cannot be registered on two accounts.
 
-## Settings (hosting → Environment variables, server side only)
+## Switching it on: two ways
 
+### Way 1: "Linked website" (no keys, only GitHub needed) - used by LearnLive
+1. `api/_aurascan_config.js` holds the AuraScan **address** (not a secret):
+   `url: 'https://desktop-8avfe05.tail6dcbd1.ts.net'`.
+2. LearnLive's server makes its own Ed25519 key pair from `SUPABASE_SERVICE_ROLE_KEY`, which the hosting
+   already has. The private half never leaves the server and is not in the code.
+   The public half is at `GET /api/aurascan?action=pubkey`.
+3. In AuraScan (3.8.1 or newer): **Developers / API -> Linked websites**, type
+   `https://learnlive-7zfo.arcada.app`, press **Link**. AuraScan reads the public key and shows its fingerprint.
+4. Every server call to AuraScan is then signed (time + method + path + body hash). AuraScan rejects
+   unsigned, changed, old (over 5 minutes) or repeated requests. The browser scan key (pk_) is made by
+   AuraScan and fetched by the server automatically.
+
+Remove the website in AuraScan and the face features switch off at once. If the AuraScan PC is off,
+LearnLive works as before (no "Face verified" badge until it is back).
+
+### Way 2: hosting settings (if you can reach them) - these win when set
 ```
 AURASCAN_URL=https://<your-aurascan-address>        # no trailing slash
 AURASCAN_PUBLIC_KEY=pk_...                          # browser key: only runs the live scan
 AURASCAN_SECRET_KEY=sk_...                          # server only, never in src/ or VITE_ variables
 ```
+Create the keys in AuraScan: **Developers / API -> Connected systems (API keys)**
+(secret key with sign-in mode "Face scan only"; public key with "Password AND face scan (2-step)").
 
-Create the keys in AuraScan: **Developers / API → Connected systems (API keys)**.
-- Secret key (sk_), sign-in mode **Face scan only** (or "Face scan OR username & password").
-- Public key (pk_), sign-in mode **Username & password AND face scan (2-step)**. The browser only uses it
-  to run the scan, and this mode stops it from being used to identify faces on its own.
-
-Redeploy after changing settings. The browser reads them at run time through `GET /api/aurascan?action=config`,
-so the address can change without a rebuild.
+To switch AuraScan off completely: set `url: ''` in `api/_aurascan_config.js` (and remove any AURASCAN_* settings).
 
 ## Files
 
-- `api/_aurascan.js`: shared helpers (AuraScan calls, check-in proof, who is calling).
-- `api/aurascan.js`: actions `config`, `status`, `enroll`, `verify`, `checkin`, `unenroll`, `login`.
+- `api/_aurascan_config.js`: the AuraScan address (no secrets).
+- `api/_aurascan.js`: shared helpers (signed AuraScan calls, check-in proof, who is calling).
+- `api/aurascan.js`: actions `config`, `pubkey`, `status`, `enroll`, `verify`, `checkin`, `unenroll`, `login`.
 - `api/attendance.js`: when AuraScan is on, `face_verified` needs a valid signed proof from `api/aurascan.js`
   for the same user and lesson (10-minute lifetime). Without AuraScan settings, nothing changes.
 - `src/lib/aurascan.ts` and `src/components/AuraScanCapture.tsx`: browser side and live scan UI.
