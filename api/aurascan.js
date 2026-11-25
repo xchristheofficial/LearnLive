@@ -4,6 +4,7 @@
 // function finishes the job with the SECRET key, which never leaves the server.
 //
 //   GET  /api/aurascan?action=config        -> is AuraScan switched on and online?
+//   GET  /api/aurascan?action=pubkey        -> this site's PUBLIC key, for linking it in AuraScan
 //   POST /api/aurascan {action:'status'}    -> is my face registered in AuraScan?     (signed in)
 //   POST /api/aurascan {action:'enroll'}    -> register / refresh my face            (signed in)
 //   POST /api/aurascan {action:'verify'}    -> is this live face really me?          (signed in)
@@ -11,7 +12,7 @@
 //   POST /api/aurascan {action:'unenroll'}  -> delete my face data from AuraScan      (signed in)
 //   POST /api/aurascan {action:'login'}     -> sign in with email + live face scan
 import supabase from './db-client.js';
-import { AURA_URL, AURA_PK, auraConfigured, aura, auraError, extId, userIdFromExt, makeProof, userFromReq } from './_aurascan.js';
+import { AURA_URL, KEYS_MODE, LINK_MODE, auraConfigured, auraBrowserKey, linkStatus, sitePublicKey, siteFingerprint, aura, auraError, extId, userIdFromExt, makeProof, userFromReq } from './_aurascan.js';
 
 const cors = (req, res) => { res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); if (req.method === 'OPTIONS') { res.status(204).end(); return true; } return false; };
 const bodyOf = (req) => { if (typeof req.body === 'string') { try { return JSON.parse(req.body || '{}'); } catch { return {}; } } return req.body || {}; };
@@ -41,9 +42,24 @@ export default async function handler(req, res) {
     // ---------------------------------------------------------------- config
     if (action === 'config') {
       if (!auraConfigured()) return res.status(200).json({ enabled: false, reason: 'not_configured' });
+      if (LINK_MODE) {
+        const pk = await auraBrowserKey();
+        if (!pk) {
+          const st = linkStatus().status;
+          return res.status(200).json({ enabled: false, reason: st === 401 || st === 403 ? 'not_linked' : 'offline', mode: 'linked' });
+        }
+        return res.status(200).json({ enabled: true, url: AURA_URL, public_key: pk, mode: 'linked' });
+      }
       const h = await aura('/health', { timeoutMs: 4000 });
       if (!h.ok) return res.status(200).json({ enabled: false, reason: 'offline' });
-      return res.status(200).json({ enabled: true, url: AURA_URL, public_key: AURA_PK });
+      return res.status(200).json({ enabled: true, url: AURA_URL, public_key: await auraBrowserKey(), mode: 'keys' });
+    }
+
+    // ---------------------------------------------------------------- pubkey
+    // Public information only: AuraScan reads it when an admin links this website.
+    if (action === 'pubkey') {
+      if (!LINK_MODE) return res.status(200).json({ app: 'LearnLive', public_key: '', error: KEYS_MODE ? 'This site uses AuraScan keys from the hosting settings, so no link is needed' : 'AuraScan is not set up on this site' });
+      return res.status(200).json({ app: 'LearnLive', public_key: sitePublicKey(), fingerprint: siteFingerprint(), aurascan_url: AURA_URL });
     }
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
