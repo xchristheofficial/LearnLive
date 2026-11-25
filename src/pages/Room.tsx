@@ -6,6 +6,8 @@ import { api, initials, uploadDataUrl } from '../lib/api';
 import { bestFaceMatch, FACE_MATCH_THRESHOLD } from '../lib/faceMatch';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from '../lib/toastBus';
+import AuraScanCapture, { type AuraScanResult } from '../components/AuraScanCapture';
+import { getAuraConfig, auraAction, auraEnrolled, type AuraConfig } from '../lib/aurascan';
 const REACTIONS: any = { thumbsup: ThumbsUp, heart: Heart, star: Star };
 
 export default function Room() {
@@ -17,6 +19,19 @@ export default function Room() {
   const [activePoll, setActivePoll] = useState<any>(null); const [pollVotes, setPollVotes] = useState<any[]>([]); const [pollDraft, setPollDraft] = useState<{ question: string; options: string[] }>({ question: '', options: ['', ''] });
   const [floats, setFloats] = useState<any[]>([]); const [copied, setCopied] = useState(false); const [recording, setRecording] = useState(false); const [seconds, setSeconds] = useState(0); const [color, setColor] = useState('#4f46e5'); const [erase, setErase] = useState(false);
   const videoRef = useRef<any>(null); const streamRef = useRef<any>(null); const screenRef = useRef<any>(null); const recRef = useRef<any>(null); const chunksRef = useRef<any[]>([]); const seenRef = useRef<any>(new Set()); const boardRef = useRef<any>(null); const drawingRef = useRef(false); const chatEndRef = useRef<any>(null);
+  // AuraScan (optional): live face check-in confirmed on the server. Only used
+  // when AuraScan is on AND this account's face is registered there.
+  const [aura, setAura] = useState<AuraConfig | null>(null); const [auraIn, setAuraIn] = useState(false); const [proof, setProof] = useState(''); const [auraErr, setAuraErr] = useState(''); const [auraBusy, setAuraBusy] = useState(false); const [scanKey, setScanKey] = useState(0);
+  useEffect(() => { (async () => { const c = await getAuraConfig(); if (c.enabled) { setAura(c); setAuraIn(await auraEnrolled()); } })(); }, []);
+  const auraCheckin = async (r: AuraScanResult) => {
+    setAuraBusy(true); setAuraErr('');
+    try {
+      const v = await auraAction('checkin', { challenge_id: r.challenge_id, session_id: Number(sessionId) });
+      if (v.verified && v.proof) { setProof(v.proof); setCheckin(r.photos.front); }
+      else setAuraErr(v.reason || 'Face does not match this account');
+    } catch (e: any) { setAuraErr(e.message); }
+    setAuraBusy(false);
+  };
   const isTeacherSession = session && user && (session.teacher_id === user.id || (cls && cls.teacher_id === user.id));
   useEffect(() => { (async () => { try { const s = await api(`/api/sessions?id=${sessionId}`); if (!s) { setErr('This lesson could not be found.'); setLoading(false); return; } setSession(s); const c = await api(`/api/classes?id=${s.class_id}`); setCls(c); } catch (e: any) { setErr(e.message); } setLoading(false); })(); }, [sessionId]);
   const refresh = async () => { try { const [p, m] = await Promise.all([api(`/api/attendance?session_id=${sessionId}`), api(`/api/messages?session_id=${sessionId}`)]); setPeople(p || []); setMsgs(m || []); (m || []).forEach((x: any) => { if (x.msg_type === 'reaction' && !seenRef.current.has(x.id)) { seenRef.current.add(x.id); const fid = Date.now() + x.id; setFloats(f => [...f, { id: fid, kind: x.content, left: 15 + Math.random() * 60 }]); setTimeout(() => setFloats(f => f.filter(y => y.id !== fid)), 2400); } else if (!seenRef.current.has(x.id)) seenRef.current.add(x.id); }); const s = await api(`/api/sessions?id=${sessionId}`); if (s) setSession(s); try { const polls = await api(`/api/polls?session_id=${sessionId}`); const live = (polls || []).find((pl: any) => pl.status === 'open') || null; setActivePoll(live); if (live) { const votes = await api(`/api/poll-votes?poll_id=${live.id}`); setPollVotes(votes || []); } else setPollVotes([]); } catch {} } catch {} };
@@ -28,7 +43,10 @@ export default function Room() {
     setJoining(true);
     try {
       let faceUrl = ''; let verified = false;
-      if (checkin) {
+      if (checkin && proof) {
+        // Confirmed by AuraScan on the server; attendance checks the proof itself.
+        faceUrl = await uploadDataUrl(checkin, 'checkin'); verified = true;
+      } else if (checkin) {
         faceUrl = await uploadDataUrl(checkin, 'checkin');
         // Actually compare the check-in photo to this account's registered
         // face photos — don't just trust that the account has a face
@@ -39,7 +57,8 @@ export default function Room() {
           verified = score !== null && score >= FACE_MATCH_THRESHOLD;
         }
       }
-      const a = await api('/api/attendance', { method: 'POST', body: JSON.stringify({ session_id: Number(sessionId), class_id: session.class_id, user_id: user.id, user_name: profile?.full_name || 'Learner', role: profile?.role || 'student', face_verified: verified, face_image_url: faceUrl, avatar_url: profile?.avatar_url || '' }) });
+      const a = await api('/api/attendance', { method: 'POST', body: JSON.stringify({ session_id: Number(sessionId), class_id: session.class_id, user_id: user.id, user_name: profile?.full_name || 'Learner', role: profile?.role || 'student', face_verified: verified, aura_proof: proof || undefined, face_image_url: faceUrl, avatar_url: profile?.avatar_url || '' }) });
+      if (typeof a.face_verified === 'boolean') verified = a.face_verified; // the server has the final say
       setAttId(a.id); setJoined(true); setTimeout(startMedia, 150);
       const g = a.gamification;
       if (g?.xpAwarded) {
@@ -84,11 +103,16 @@ export default function Room() {
   if (!session) return <div className="min-h-screen grid place-items-center p-5"><div className="text-center"><p className="font-bold">{err || 'Lesson not found'}</p><Link to="/schedule" className="text-indigo-700 font-bold text-sm">← Back to schedule</Link></div></div>;
   if (!joined) return <div className="min-h-screen bg-slate-950 text-white"><div className="max-w-5xl mx-auto px-4 py-10 grid md:grid-cols-2 gap-10 items-center">
     <div><span className={`text-xs font-extrabold px-3 py-1.5 rounded-full ${session.status === 'live' ? 'bg-rose-600' : 'bg-slate-700'}`}>{session.status === 'live' ? 'LIVE NOW' : session.status === 'ended' ? 'ENDED' : 'SCHEDULED'}</span><h1 className="text-3xl sm:text-4xl font-extrabold mt-4">{session.title}</h1><p className="text-slate-400 mt-2">{session.class_title} · with {session.teacher_name}</p>
-    <div className="bg-white/5 border border-white/10 rounded-3xl p-5 mt-6"><h2 className="font-extrabold flex items-center gap-2"><ScanFace className="text-teal-300" /> Face check-in</h2><p className="text-sm text-slate-400 mt-1.5">Take a quick photo so your attendance is recorded{profile?.face_registered ? ' and marked as face-verified against your registered face profile.' : '. Tip: register your face first to get the verified badge.'}</p>{!profile?.face_registered && <Link to="/face-setup" className="inline-block mt-3 text-sm font-bold text-teal-300 underline">Register my face first →</Link>}<p className="text-xs text-slate-500 mt-3">You can also join without a photo — your attendance will simply show as “no face photo”.</p></div>
+    <div className="bg-white/5 border border-white/10 rounded-3xl p-5 mt-6"><h2 className="font-extrabold flex items-center gap-2"><ScanFace className="text-teal-300" /> Face check-in</h2>{aura && auraIn ? <p className="text-sm text-slate-400 mt-1.5">Do the short live face scan. AuraScan confirms it is really you, and your attendance gets the <b className="text-emerald-300">Face verified</b> badge.</p> : aura && profile?.face_registered ? <p className="text-sm text-slate-400 mt-1.5">Take a quick photo so your attendance is recorded. <Link to="/face-setup" className="font-bold text-teal-300 underline">Do the AuraScan live scan</Link> once to get the Face verified badge.</p> : <p className="text-sm text-slate-400 mt-1.5">Take a quick photo so your attendance is recorded{profile?.face_registered ? ' and marked as face-verified against your registered face profile.' : '. Tip: register your face first to get the verified badge.'}</p>}{!profile?.face_registered && <Link to="/face-setup" className="inline-block mt-3 text-sm font-bold text-teal-300 underline">Register my face first →</Link>}<p className="text-xs text-slate-500 mt-3">You can also join without a photo — your attendance will simply show as “no face photo”.</p></div>
     {err && <p className="mt-4 text-sm bg-rose-500/15 border border-rose-500/40 text-rose-200 rounded-xl px-4 py-3">{err}</p>}
-    <button disabled={joining || session.status === 'ended'} onClick={join} className="w-full mt-6 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-extrabold py-4 rounded-2xl text-lg">{joining ? 'Joining…' : session.status === 'ended' ? 'This lesson has ended' : checkin ? 'Join class with face check-in' : 'Join class'}</button>
+    <button disabled={joining || session.status === 'ended'} onClick={join} className="w-full mt-6 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-extrabold py-4 rounded-2xl text-lg">{joining ? 'Joining…' : session.status === 'ended' ? 'This lesson has ended' : proof ? 'Join class — face verified ✓' : checkin ? 'Join class with face check-in' : 'Join class'}</button>
     <button onClick={() => nav(-1)} className="w-full mt-2 text-slate-400 text-sm font-semibold py-2">Go back</button></div>
-    <div className="bg-white rounded-[2rem] p-5 text-slate-900"><FaceCapture instruction="Face check-in — look at the camera" onCapture={(u: string) => setCheckin(u)} /></div>
+    <div className="bg-white rounded-[2rem] p-5 text-slate-900">{aura && auraIn ? <>
+      <AuraScanCapture key={scanKey} cfg={aura} title="Face check-in" onDone={auraCheckin} />
+      {auraBusy && <p className="text-sm text-indigo-700 font-semibold mt-3">Confirming with AuraScan…</p>}
+      {proof && <p className="text-sm text-emerald-700 font-bold mt-3">✓ Verified. Press “Join class”.</p>}
+      {auraErr && <><p className="text-sm text-rose-700 bg-rose-50 rounded-xl px-3 py-2 mt-3">{auraErr}</p><button onClick={() => { setAuraErr(''); setScanKey(k => k + 1); }} className="w-full mt-2 bg-indigo-600 text-white font-bold py-2.5 rounded-xl text-sm">Scan again</button></>}
+    </> : <FaceCapture instruction="Face check-in — look at the camera" onCapture={(u: string) => setCheckin(u)} />}</div>
   </div></div>;
   const others = people.filter(p => p.user_id !== user.id);
   const chatMsgs = msgs.filter(m => m.msg_type !== 'reaction');

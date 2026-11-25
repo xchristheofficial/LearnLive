@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, ScanFace, GraduationCap, ShieldAlert, LogOut, RefreshCw } from 'lucide-react';
 import FaceCapture from '../components/FaceCapture';
@@ -6,6 +6,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { api, uploadDataUrl } from '../lib/api';
 import { bestFaceMatch, FACE_MATCH_THRESHOLD } from '../lib/faceMatch';
 import { toast } from '../lib/toastBus';
+import AuraScanCapture, { type AuraScanResult } from '../components/AuraScanCapture';
+import { getAuraConfig, auraAction, auraEnrolled, FACE_LOGIN_FLAG, type AuraConfig } from '../lib/aurascan';
 
 // Runs right after sign-in: if this account already has a registered face,
 // the camera opens automatically, auto-detects + auto-captures a quick
@@ -17,15 +19,24 @@ import { toast } from '../lib/toastBus';
 // unregistered accounts skip straight to Face Registration instead.
 export default function FaceCheck() {
   const { user, profile, loading, signOut } = useAuth(); const nav = useNavigate();
-  const [stage, setStage] = useState<'wait' | 'scan' | 'checking' | 'mismatch' | 'inconclusive' | 'camera-error' | 'done'>('wait');
+  const [stage, setStage] = useState<'wait' | 'scan' | 'aura' | 'checking' | 'mismatch' | 'inconclusive' | 'camera-error' | 'done'>('wait');
   const [attempts, setAttempts] = useState(0); const [score, setScore] = useState<number | null>(null);
+  // AuraScan (optional): when it is on and this account's face is registered
+  // there, the check is a live head-turn scan confirmed by the AuraScan server.
+  // Otherwise (or if AuraScan is unreachable) the original on-device check runs.
+  const [aura, setAura] = useState<AuraConfig | null>(null); const [auraReady, setAuraReady] = useState(false); const [auraReason, setAuraReason] = useState(''); const faceLoginRef = useRef(false);
+  useEffect(() => { if (!user) return; (async () => { const c = await getAuraConfig(); if (c.enabled && await auraEnrolled()) setAura(c); setAuraReady(true); })(); }, [user?.id]);
 
   useEffect(() => {
     if (loading || !user) return;
     if (!profile) return;
+    // Just signed in WITH a live face scan on the sign-in page: don't ask twice.
+    if (faceLoginRef.current) return;
+    if (sessionStorage.getItem(FACE_LOGIN_FLAG) === user.id) { faceLoginRef.current = true; sessionStorage.removeItem(FACE_LOGIN_FLAG); awardDailyLogin(); setStage('done'); setTimeout(() => nav('/dashboard', { replace: true }), 1100); return; }
     if (!profile.face_registered) { nav('/face-setup', { replace: true }); return; }
-    setStage('scan');
-  }, [loading, user, profile]);
+    if (!auraReady) return;
+    setStage(aura ? 'aura' : 'scan');
+  }, [loading, user, profile, auraReady]);
 
   const logAttempt = (photoUrl: string, matched: boolean, s: number | null) => {
     api('/api/login-verifications', { method: 'POST', body: JSON.stringify({ user_id: user.id, user_name: profile.full_name, photo_url: photoUrl, matched, score: s }) }).catch(() => {});
@@ -59,8 +70,20 @@ export default function FaceCheck() {
     else { setAttempts(a => a + 1); setStage('mismatch'); }
   };
 
+  const onAura = async (r: AuraScanResult) => {
+    setStage('checking'); setAuraReason('');
+    let v: any;
+    try { v = await auraAction('verify', { challenge_id: r.challenge_id }); }
+    catch { setAura(null); setStage('scan'); return; } // AuraScan hiccup -> original check
+    let photoUrl = ''; try { photoUrl = await uploadDataUrl(r.photos.front, 'login-check'); } catch {}
+    logAttempt(photoUrl, !!v.verified, v.score ?? null);
+    if (v.verified) { awardDailyLogin(); setStage('done'); setTimeout(() => nav('/dashboard', { replace: true }), 1100); }
+    else { setScore(null); setAuraReason(v.reason || ''); setAttempts(a => a + 1); setStage('mismatch'); }
+  };
+  const onAuraError = (m: string) => { if (/camera/i.test(m)) setStage('camera-error'); else { setAura(null); setStage('scan'); } };
+
   const onCameraError = () => setStage('camera-error');
-  const retry = () => { setStage('scan'); };
+  const retry = () => { setStage(aura ? 'aura' : 'scan'); };
   const signOutAndLeave = async () => { await signOut(); nav('/login', { replace: true }); };
 
   if (stage === 'wait') return <div className="min-h-screen bg-slate-950 grid place-items-center text-white"><div className="text-center"><GraduationCap className="mx-auto animate-pulse text-indigo-400" size={34} /><p className="text-slate-400 text-sm mt-3">Signing you in…</p></div></div>;
@@ -72,7 +95,7 @@ export default function FaceCheck() {
   if (stage === 'mismatch') return <div className="min-h-screen bg-slate-950 text-white grid place-items-center p-5"><div className="max-w-sm w-full text-center">
     <span className="w-16 h-16 rounded-full bg-rose-500/15 grid place-items-center mx-auto"><ShieldAlert className="text-rose-400" size={30} /></span>
     <h1 className="text-2xl font-extrabold mt-4">This doesn't look like {profile?.full_name?.split(' ')[0]}</h1>
-    <p className="text-slate-400 text-sm mt-1.5 mb-5">The face we just captured doesn't match the face registered on this account{score != null ? ` (match ${Math.round(score * 100)}%, need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%+)` : ''}. For everyone's safety, we can't continue until this is verified. Make sure you're signed into your own account and try again in good lighting.</p>
+    <p className="text-slate-400 text-sm mt-1.5 mb-5">The face we just captured doesn't match the face registered on this account{score != null ? ` (match ${Math.round(score * 100)}%, need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%+)` : ''}. {auraReason && !/match/i.test(auraReason) ? ` ${auraReason}.` : ''} For everyone's safety, we can't continue until this is verified. Make sure you're signed into your own account and try again in good lighting.</p>
     <button onClick={retry} className="w-full inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold py-3.5 rounded-2xl"><RefreshCw size={17} /> Try scanning again</button>
     <button onClick={signOutAndLeave} className="w-full mt-3 inline-flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white font-bold py-3 rounded-2xl text-sm"><LogOut size={16} /> This isn't my account — sign out</button>
     <p className="text-[11px] text-slate-500 mt-4">Attempt {attempts} logged to this account's attendance record.</p>
@@ -84,6 +107,14 @@ export default function FaceCheck() {
     <p className="text-slate-400 text-sm mt-1.5 mb-5">We couldn't access a camera on this device to verify your face. You can continue without verification this time, or try again.</p>
     <button onClick={retry} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold py-3.5 rounded-2xl mb-3">Try again</button>
     <button onClick={() => { awardDailyLogin(); nav('/dashboard', { replace: true }); }} className="w-full text-sm text-slate-400 underline">Continue without camera</button>
+  </div></div>;
+
+  if (stage === 'aura' && aura) return <div className="min-h-screen bg-slate-950 text-white grid place-items-center p-5"><div className="max-w-sm w-full text-center">
+    <ScanFace className="mx-auto text-teal-300" size={34} />
+    <h1 className="text-2xl font-extrabold mt-3">Verifying it's you…</h1>
+    <p className="text-slate-400 text-sm mt-1.5 mb-5">A short live face scan: look straight, then slowly turn your head when asked.</p>
+    <div className="bg-white rounded-[2rem] p-5 text-left"><AuraScanCapture key={attempts} cfg={aura} title="Live face check" onDone={onAura} onError={onAuraError} /></div>
+    <button onClick={signOutAndLeave} className="mt-4 text-xs text-slate-500 underline">Not you? Sign out</button>
   </div></div>;
 
   return <div className="min-h-screen bg-slate-950 text-white grid place-items-center p-5"><div className="max-w-sm w-full text-center">
